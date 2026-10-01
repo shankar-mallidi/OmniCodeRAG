@@ -1,0 +1,3 @@
+# Backward-compatible parser environment entry point.
+# Runtime dependencies are intentionally maintained in one place.
+-r requirements.txt

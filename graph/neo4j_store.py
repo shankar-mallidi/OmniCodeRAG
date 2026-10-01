@@ -1,0 +1,63 @@
+from typing import List, Dict, Any, Optional
+from neo4j import GraphDatabase, Driver
+from graph.models import GraphNode, GraphEdge
+
+
+class Neo4jStore:
+    def __init__(
+        self,
+        uri: str = "bolt://localhost:7687",
+        user: str = "neo4j",
+        password: str = "password",
+        driver: Optional[Driver] = None,
+    ):
+        self.driver = driver or GraphDatabase.driver(uri, auth=(user, password))
+
+    def close(self):
+        if self.driver:
+            self.driver.close()
+
+    def execute_query(
+        self, query: str, parameters: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run(query, parameters or {})
+            return [record.data() for record in result]
+
+    def create_constraints(self):
+        queries = [
+            "CREATE CONSTRAINT node_id_unique IF NOT EXISTS FOR (n:Node) REQUIRE n.id IS UNIQUE",
+        ]
+        with self.driver.session() as session:
+            for q in queries:
+                session.run(q)
+
+    def insert_nodes(self, nodes: List[GraphNode]):
+        """Insert queryable graph nodes without requiring the APOC plugin."""
+        portable_query = """
+        UNWIND $batch AS data
+        MERGE (n {id: data.id})
+        SET n:Node,
+            n.name = data.name,
+            n.file_path = data.file_path,
+            n.language = data.language,
+            n.start_line = data.start_line,
+            n.end_line = data.end_line,
+            n.label = data.label,
+            n.repository = coalesce(data.properties.repository, 'default_repo'),
+            n.reference = coalesce(data.properties.reference, false)
+        """
+        payload = [node.model_dump() for node in nodes]
+        with self.driver.session() as session:
+            session.run(portable_query, batch=payload)
+
+    def insert_edges(self, edges: List[GraphEdge]):
+        query = """
+        UNWIND $batch AS data
+        MATCH (source {id: data.source_id})
+        MATCH (target {id: data.target_id})
+        MERGE (source)-[r:RELATION {type: data.type}]->(target)
+        """
+        payload = [edge.model_dump() for edge in edges]
+        with self.driver.session() as session:
+            session.run(query, batch=payload)
